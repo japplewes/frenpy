@@ -22,8 +22,8 @@ class Quad:
     self.iddata = np.array([[0,1,2], [2,3,0]], dtype=np.int32)
     self.vxdata = np.array([[-1.0, -1.0, 0.0,   0.0, 0.0, 0.0, 1.0],
                             [ 1.0, -1.0, 0.0,   1.0, 0.0, 0.0, 1.0],
-                            [ 1.0,  1.0, 0.0,   1.0, 0.0, 1.0, 1.0],
-                            [-1.0,  1.0, 0.0,   0.0, 0.0, 1.0, 1.0]], dtype=np.float32)
+                            [ 1.0,  1.0, 0.0,   1.0, 1.0, 4.0, 1.0],
+                            [-1.0,  1.0, 0.0,   0.0, 1.0, 4.0, 1.0]], dtype=np.float32)
     #self.vxdata = np.array([[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     #                        [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
     #                        [1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0],
@@ -32,7 +32,7 @@ class Quad:
   def init(self):
     self.vbo = glGenBuffers(1)
     glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
-    print(self.vxdata.flatten())
+    #print(self.vxdata.flatten())
     glBufferData(GL_ARRAY_BUFFER, self.vxdata, GL_STATIC_DRAW)
     
     self.vao = glGenVertexArrays(1)
@@ -149,45 +149,94 @@ layout(location = 0) out vec4 color;
 layout(location = 1) out float alpha;
 
 in vec4 col;
+uniform sampler2D tex;
 
 void main(){
-  color = vec4(col.xyz * 2, 0.5f);
+  color = texture(tex, col.xy);
   alpha = 0.5f;
 }
 '''
 
-class target_texture:
+class texture:
   RGBA = 0x4
   R = 0x1
   RED = 0x1
   MONO = 0x1
   RGB = 0x3
-  def __init__(self, size = (512, 512), channels = 0x4):
-    self.size = size
+  def __init__(self, channels = 0x4):
+    self.texture = None
+    self.data = None
+    self.size = None
     self.channels = channels
-    self._texture = None
-    self.data = []
-  
-  def init(self):
-    self._texture = glGenTextures(1)
-    glBindTexture(GL_TEXTURE_2D, self._texture)
-    
-    glTexImage2D(GL_TEXTURE_2D, 0, self.__gl_channels_internal(), self.size[0], self.size[1], 0, self.__gl_channels_type(), GL_FLOAT, None)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
   
   @staticmethod
-  def unbind():
-    glBindTexture(GL_TEXTURE_2D, 0)
+  def unbind(dim = 2, layer = 0):
+    glActiveTexture(GL_TEXTURE0 + layer)
+    glBindTexture(texture._gl_dim(dim), 0)
+    
+  def bind(self, layer = 0):
+    glActiveTexture(GL_TEXTURE0 + layer)
+    glBindTexture(self._gl_dim(self.dim), self.texture)
+  
+  dim = property()
+  
+  @dim.getter
+  def dim(self):
+    return len(self.size) if self.size else 0
+  
+  @staticmethod
+  def _gl_dim(dim):
+    if dim == 1:
+      return GL_TEXTURE_1D
+    if dim == 2:
+      return GL_TEXTURE_2D
+    if dim == 3:
+      return GL_TEXTURE_3D
+  
+  def load(self, filename):
+    i = Image.open(filename)
+    if i == None:
+      return
+    assert(isinstance(i, Image.Image))
+    self.create(i.size, i)
+    
+  
+  def create(self, size, data):
+    self.texture = glGenTextures(1)
+    self.size = size
+    if data != None:
+      d = (np.array(data))
+      if d.dtype == np.dtype(np.int8) or d.dtype == np.dtype(np.uint8):
+        self.data = (np.float32(d) / 255.0)
+      else:
+        self.data = np.array(data, np.float32)
+      #self.size = self.data.shape
+    self.bind()
+    
+    if self.dim == 1:
+      glTexImage1D(GL_TEXTURE_1D, 0, self.__gl_channels_internal(), self.size[0], 0, self.__gl_channels_type(), GL_FLOAT, self.data)
+    if self.dim == 2:
+      glTexImage2D(GL_TEXTURE_2D, 0, self.__gl_channels_internal(), self.size[0], self.size[1], 0, self.__gl_channels_type(), GL_FLOAT, self.data)
+    if self.dim == 3:
+      glTexImage3D(GL_TEXTURE_3D, 0, self.__gl_channels_internal(), self.size[0], self.size[1], self.size[2], 0, self.__gl_channels_type(), GL_FLOAT, self.data)
+      
+    glTexParameteri(self._gl_dim(self.dim), GL_TEXTURE_WRAP_S, GL_REPEAT)
+    glTexParameteri(self._gl_dim(self.dim), GL_TEXTURE_WRAP_T, GL_REPEAT)
+    
+    glTexParameteri(self._gl_dim(self.dim), GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+    glTexParameteri(self._gl_dim(self.dim), GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+    
+    #glTexParameteri(self._gl_dim(self.dim), GL_TEXTURE_WRAP_R, GL_REPEAT)
   
   def read(self):
+    self.bind()
     self.data = glGetTexImage(GL_TEXTURE_2D, 0, self.__gl_channels_type(), GL_FLOAT, None)
   
   def destroy(self):
-    self.unbind()
-    if self._texture:
-      glDeleteFramebuffers(1, [self._texture])
-      self._texture = None
+    self.unbind(self.dim)
+    if self.texture:
+      glDeleteFramebuffers(1, [self.texture])
+      self.texture = None
   
   def __gl_channels_internal(self):
     if self.channels == 1:
@@ -203,7 +252,22 @@ class target_texture:
       return GL_RGB
     if self.channels == 4:
       return GL_RGBA
+  
 
+class target_texture(texture):
+  def __init__(self, size = (512, 512), channels = 0x4):
+    texture.__init__(self, channels)
+    self.size = size
+  
+  def init(self):
+    self.create(self.size, None)
+    #self._texture = glGenTextures(1)
+    
+    #glTexImage2D(GL_TEXTURE_2D, 0, self.__gl_channels_internal(), self.size[0], self.size[1], 0, self.__gl_channels_type(), GL_FLOAT, None)
+    #glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+    #glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+  
+  
 class framebuffer:
   def __init__(self, size = (512, 512)):
     self.fbo = None
@@ -242,10 +306,10 @@ class framebuffer:
     #glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
     #glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, self._renderAlpha, 0);
   
-    #self._depthBuffer = glGenRenderbuffers(1)
-    #glBindRenderbuffer(GL_RENDERBUFFER, self._depthBuffer)
-    #glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, self.size[0], self.size[1])
-    #glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, self._depthBuffer)
+    self._depthBuffer = glGenRenderbuffers(1)
+    glBindRenderbuffer(GL_RENDERBUFFER, self._depthBuffer)
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, self.size[0], self.size[1])
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, self._depthBuffer)
 
     #glDrawBuffers([GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1]);
     
@@ -253,7 +317,7 @@ class framebuffer:
     glBindFramebuffer(GL_FRAMEBUFFER, self.fbo)
     
     for k, v in self._drawBuffers.items():
-      glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + k, v._texture, 0);
+      glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + k, v.texture, 0);
     glDrawBuffers([x + GL_COLOR_ATTACHMENT0 for x in self._drawBuffers.keys()]);
 
     glViewport(0,0, self.size[0], self.size[1])
@@ -290,12 +354,10 @@ class framebuffer:
       #glBindTexture(GL_TEXTURE_2D, self._renderAlpha)
       #self.data[:,:,3] = glGetTexImage(GL_TEXTURE_2D, 0, GL_RED, GL_FLOAT, None)
       
-      #print(self.data)
     self.draw(__render)
     
   def save_pic(self, target, filename):
     arr = self._drawBuffers[target].data[::-1,:,:]
-    #print(arr)
     im = Image.fromarray(np.uint8(arr*255))
     im.save(filename)
     
@@ -315,12 +377,149 @@ class framebuffer:
       #self._renderAlpha = None
     
 
+class shader_object:
+  def __init__(self):
+    self.shader = None
+  
+  def init(self, shader):
+    assert(isinstance(shader, shader_program))
+    self.shader = shader
+  
+  def to_shader(self):
+    return ''
+
+class shader_variable(shader_object):
+  def __init__(self):
+    shader_object.__init__(self)
+  
+  @staticmethod
+  def _gl_uniform(val, layer = 0):
+    def _flat(v):
+      print(v)
+      if isinstance(v, np.ndarray):
+        return list(v.flatten())
+      return list(v)
+    
+    def _wrap(_func, count = None, transpose = None, value = None):
+      value = value if value != None else val
+      if transpose != None:
+        return lambda x: _func(x, count, transpose, _flat(value))
+      if count == None:
+        return lambda x: _func(x, value)
+      return lambda x: _func(x, count, _flat(value))
+    
+    if isinstance(val, texture):
+      val.bind(layer)
+      return _wrap(glUniform1i, value=layer)
+    if isinstance(val, np.float32) or isinstance(val, float):
+      return _wrap(glUniform1f)
+    if isinstance(val, np.float64):
+      return _wrap(glUniform1d)
+    if isinstance(val, np.int32) or isinstance(val, int):
+      return _wrap(glUniform1i)
+    if isinstance(val, np.uint32):
+      return _wrap(glUniform1ui)
+    
+    value = np.array(val)
+    
+#    if isinstance(value, np.ndarray):
+    if len(value.shape) == 1:
+      if value.dtype == np.dtype(np.float32):
+        if value.shape[0] == 1: return _wrap(glUniform1fv,1)
+        if value.shape[0] == 2: return _wrap(glUniform2fv,1)
+        if value.shape[0] == 3: return _wrap(glUniform3fv,1)
+        if value.shape[0] == 4: return _wrap(glUniform4fv,1)
+      if value.dtype == np.dtype(np.float64):
+        if value.shape[0] == 1: return _wrap(glUniform1dv,1)
+        if value.shape[0] == 2: return _wrap(glUniform2dv,1)
+        if value.shape[0] == 3: return _wrap(glUniform3dv,1)
+        if value.shape[0] == 4: return _wrap(glUniform4dv,1)
+      if value.dtype == np.dtype(np.int32()):
+        if value.shape[0] == 1: return _wrap(glUniform1iv,1)
+        if value.shape[0] == 2: return _wrap(glUniform2iv,1)
+        if value.shape[0] == 3: return _wrap(glUniform3iv,1)
+        if value.shape[0] == 4: return _wrap(glUniform4iv,1)
+      if value.dtype == np.dtype(np.uint32()):
+        if value.shape[0] == 1: return _wrap(glUniform1uiv,1)
+        if value.shape[0] == 2: return _wrap(glUniform2uiv,1)
+        if value.shape[0] == 3: return _wrap(glUniform3uiv,1)
+        if value.shape[0] == 4: return _wrap(glUniform4uiv,1)
+    if len(value.shape) == 2:
+      if value.shape[0] == 2: 
+        if value.shape[1] == 2:
+          if value.dtype == np.dtype(np.float32):
+            return _wrap(glUniformMatrix2fv, 1, GL_FALSE)
+          if value.dtype == np.dtype(np.float64):
+            return _wrap(glUniformMatrix2dv, 1, GL_FALSE)
+        if value.shape[1] == 3:
+          if value.dtype == np.dtype(np.float32):
+            return _wrap(glUniformMatrix2x3fv, 1, GL_FALSE)
+          if value.dtype == np.dtype(np.float64):
+            return _wrap(glUniformMatrix2x3dv, 1, GL_FALSE)
+        if value.shape[1] == 4:
+          if value.dtype == np.dtype(np.float32):
+            return _wrap(glUniformMatrix2x4fv, 1, GL_FALSE)
+          if value.dtype == np.dtype(np.float64):
+            return _wrap(glUniformMatrix2x4dv, 1, GL_FALSE)
+      if value.shape[0] == 3: 
+        if value.shape[1] == 2:
+          if value.dtype == np.dtype(np.float32):
+            return _wrap(glUniformMatrix3x2fv, 1, GL_FALSE)
+          if value.dtype == np.dtype(np.float64):
+            return _wrap(glUniformMatrix3x2dv, 1, GL_FALSE)
+        if value.shape[1] == 3:
+          if value.dtype == np.dtype(np.float32):
+            return _wrap(glUniformMatrix3fv, 1, GL_FALSE)
+          if value.dtype == np.dtype(np.float64):
+            return _wrap(glUniformMatrix3dv, 1, GL_FALSE)
+        if value.shape[1] == 4:
+          if value.dtype == np.dtype(np.float32):
+            return _wrap(glUniformMatrix3x4fv, 1, GL_FALSE)
+          if value.dtype == np.dtype(np.float64):
+            return _wrap(glUniformMatrix3x4dv, 1, GL_FALSE)
+      if value.shape[0] == 4: 
+        if value.shape[1] == 2:
+          if value.dtype == np.dtype(np.float32):
+            return _wrap(glUniformMatrix4x2fv, 1, GL_FALSE)
+          if value.dtype == np.dtype(np.float64):
+            return _wrap(glUniformMatrix4x2dv, 1, GL_FALSE)
+        if value.shape[1] == 3:
+          if value.dtype == np.dtype(np.float32):
+            return _wrap(glUniformMatrix4x3fv, 1, GL_FALSE)
+          if value.dtype == np.dtype(np.float64):
+            return _wrap(glUniformMatrix4x3dv, 1, GL_FALSE)
+        if value.shape[1] == 4:
+          if value.dtype == np.dtype(np.float32):
+            return _wrap(glUniformMatrix4fv, 1, GL_FALSE)
+          if value.dtype == np.dtype(np.float64):
+            return _wrap(glUniformMatrix4dv, 1, GL_FALSE)
+      
+    return None
+
+class shader_uniform_object(shader_variable):
+  def __init__(self, name, type_text):
+    shader_variable.__init__(self)
+    self.location = None
+    self.name = name
+    self.type_text = type_text
+    
+  def init(self, shader):
+    shader_object.init(self, shader)
+    self.shader.bind()
+    self.location = glGetUniformLocation(self.shader.shader, self.name)
+    
+  def set_value(self, value):
+    s = shader_variable._gl_uniform(value)
+    if s: s(self.location)
+    
+  def to_shader(self):
+    return 'uniform {} {};\n'.format(self.type_text, self.name);
+
 class gl_filter:
   def __init__(self, size = (512, 512)):
     self._inputs = []
     self._names = {}
     self._outputs = []
-    self.fb = framebuffer(size)
     
   def init(self):
     max_textures = glGetInteger(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS)
@@ -339,12 +538,11 @@ def main():
     glutInitWindowSize(400,400)
     glutCreateWindow(name)
     
-    #print()
     
     glClearColor(0.,0.,0.,1.)
     #glShadeModel(GL_SMOOTH)
     #glEnable(GL_CULL_FACE)
-    glEnable(GL_DEPTH_TEST)
+    glDisable(GL_DEPTH_TEST)
     #glCullFace(GL_FRONT_AND_BACK)
     glDisable(GL_LIGHTING)
     #lightZeroPosition = [10.,4.,10.,1.]
@@ -357,6 +555,7 @@ def main():
     q = Quad()
     fb = framebuffer()
     sh = shader_program(VERTEX_SOURCE, FRAGMENT_SOURCE)
+    var = shader_uniform_object('tex', 'sampler2D')
     target = target_texture()
     
     def display():
@@ -376,11 +575,23 @@ def main():
     q.init()
     sh.init()
     fb.init()
+    image = texture()
+    image.load('test_img2.png')
+    #loc = glGetUniformLocation(sh.shader, 'texture')
+    
+    var.init(sh)
+    #var.set_value(np.array([0.0, 1.0, 0.0, 0.0], np.float32))
+    
     target.init()
     
     fb.attach(0, target)
     
-    fb.render(lambda: sh.draw(q.bind))
+    def _render():
+      var.set_value(image)
+      #glUniform4fv(loc, 1, [0.0, 1.0, 0.0, 0.0])
+      q.bind()
+      
+    fb.render(lambda : sh.draw(_render))
     fb.save_pic(0, 'test_img.png')
     
     
